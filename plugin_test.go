@@ -24,7 +24,7 @@ func isolatedState(t *testing.T) {
 
 func managementCall(t *testing.T, method, path, body string) managementResponse {
 	t.Helper()
-	raw, _ := json.Marshal(managementRequest{Method: method, Path: "/plugins/mistral-bridge" + path, Body: []byte(body)})
+	raw, _ := json.Marshal(managementRequest{Method: method, Path: "/plugins/vibe-bridge" + path, Body: []byte(body)})
 	reply, err := handleMethod("management.handle", raw)
 	if err != nil {
 		t.Fatal(err)
@@ -79,10 +79,10 @@ func TestMappingRegistrationRenameAndCatalogSync(t *testing.T) {
 		t.Fatal(string(response.Body))
 	}
 	raw, _ := staticModels(nil)
-	if !strings.Contains(string(raw), `"ID":"short"`) || strings.Contains(string(raw), `"ID":"mistral-bridge/short"`) {
+	if !strings.Contains(string(raw), `"ID":"short"`) || strings.Contains(string(raw), `"ID":"vibe-bridge/short"`) {
 		t.Fatal(string(raw))
 	}
-	for _, model := range []string{"short", "mistral-bridge/short"} {
+	for _, model := range []string{"short", "vibe-bridge/short"} {
 		route, _ := routeModel([]byte(`{"RequestedModel":"` + model + `"}`))
 		if !strings.Contains(string(route), `"Handled":true`) {
 			t.Fatal(string(route))

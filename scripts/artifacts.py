@@ -9,7 +9,7 @@ import re
 import zipfile
 
 
-PLUGIN_ID = "mistral-bridge"
+PLUGIN_ID = "vibe-bridge"
 PLATFORMS = (
     ("linux", "amd64", "ubuntu-22.04", "gcc", "python3"),
     ("linux", "arm64", "ubuntu-22.04-arm", "gcc", "python3"),

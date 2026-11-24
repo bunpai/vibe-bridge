@@ -1,40 +1,55 @@
 # Vibe Bridge — fork 说明
 
-从 RzMY/MistralBridge fork，改动在分支 `vibe-fingerprint`（commit ea3da47）。
+从 RzMY/MistralBridge fork（分支 `vibe-fingerprint`）。pluginID 已改名
+`vibe-bridge`（官方商店已占 `mistral-bridge`，避免冲突）。
 指纹规范文档: `../vibe-fingerprint.md`
 
 ## 相对上游的改动 (mistral.go)
 
-1. **developer → system 折叠**：transformRequest 消息循环里把 OpenAI Responses
-   的 developer role 转成 system。这是原 bug —— Mistral 只收
-   system/user/assistant/tool，裸 developer 直接 422。
-2. **injectVibeMetadata**：channel=vibe 时把官方 Vibe CLI 的完整请求归因写进
-   metadata —— call_source=vibe_code（始终覆盖）、call_type=main_call、
-   host_kind=local、version/agent_version/client_version=3.1.4、
-   agent_entrypoint=cli、client_name=vibe-cli、session_id（进程期 UUID）、
-   os/arch/os_version。客户端自带 metadata 键保留（只有 call_source 强制）。
-3. **vibeRequestHeaders**：channel=vibe 时上游请求加
-   `User-Agent: mistral-client-python/Mistral-Vibe/3.1.4` 和
-   `X-Affinity: <session_id>`（官方 Vibe 的缓存路由头）。studio/auto 不变。
+1. **developer → system 折叠**（修 Mistral 422）
+2. **injectVibeMetadata**：channel=vibe 时写官方 Vibe 全套请求归因
+   （call_source=vibe_code、call_type、host_kind、version 3.1.4、
+   session_id、os/arch/os_version）；客户端 metadata 键保留
+3. **vibeRequestHeaders**：channel=vibe 时加
+   `User-Agent: mistral-client-python/Mistral-Vibe/3.1.4` + `X-Affinity`
+4. **改名**：pluginID/mistral-bridge → vibe-bridge（plugin.go、artifacts.py、
+   build.yml、web/app.js、tests 全量替换）
 
-## 本地验证 (cpa-test/)
+## 商店分发（direct 类型，自托管）
 
-- 本地 CPA 8.0.64 (源码 build 于 ../cpa-local) + 插件 + mock 上游
-- 非流式、流式、/v1/responses 三条路径 wire capture 全部命中指纹
-- studio channel 负向验证：无 metadata、UA 为 Go 默认
-- 原 422 根因修复：developer role 在三条路径都折叠为 system
+- `store/registry.json`：schema_version 2，direct install，含 linux/amd64、
+  linux/arm64、darwin/arm64 三个产物 URL+sha256（URL 里 BASE_URL 占位符待替换）
+- `dist/`：商店格式 zip（`vibe-bridge_0.1.0_<os>_<arch>.zip`，包内只有动态库）
+- 部署：把 registry.json + zip 放到任意静态 URL（例：VPS nginx
+  `https://ai.8823823.xyz/plugin-store/`），CPA config 加：
+  ```yaml
+  plugins:
+    enabled: true
+    dir: plugins
+    store-sources:
+      - "https://ai.8823823.xyz/plugin-store/registry.json"
+    configs:
+      vibe-bridge:
+        enabled: true
+  ```
+  → 面板商店出现 "Mistral Vibe Bridge" → 点安装 → 无需重启生效
+- http 源需加 `store-auth` 规则 `allow-insecure: true`（https 不需要）
 
-## 部署到 VPS
+## 已验证
 
-1. 构建 linux/amd64: `GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=? `
-   —— c-shared 需要交叉 C 工具链；或者在 VPS 上直接 go build。
-   （VPS 是 Linux；arm64 则 GOARCH=arm64）
-2. 覆盖 `plugins/linux/<arch>/mistral-bridge.so`（pluginID 没变，state.json 兼容）
-3. 重启 CPA，在管理页把 key 的 channel 设为 **vibe**
-4. 验证：请求任意 mistral 模型，看 requests.jsonl / upstream 日志
+- 本地 CPA 8.0.64 从自建商店安装 → 无需重启加载 → 请求全指纹 ✓
+- developer→system / 流式 / /v1/responses / studio 负向全过 ✓
+- linux .so 用 zig cc 交叉编译（仅需 GLIBC 2.3.2，Ubuntu 22.04+ 无虞）✓
+
+## VPS 上线步骤
+
+1. 上传 registry.json（BASE_URL→实际 URL）+ 两个 linux zip 到静态路径
+2. CPA config.yaml 加 store-sources（或面板 config.yaml 编辑器）
+3. 面板插件商店点安装 → 凭证管理加 Mistral key，channel 设 vibe → 模型映射
 
 ## 注意
 
-- API-key 路径的 Vibe 不带 tenant headers（x-external-organization-id 等），
-  这是官方行为 —— 只有 OIDC 登录的 key 才带。插件 key 是 API key，正确省略。
-- vibeClientVersion="3.1.4" 需跟随 Vibe 版本演进（vibe/__init__.py __version__）。
+- API-key 路径的 Vibe 不带 tenant headers（官方行为，正确省略）
+- vibeClientVersion 跟随官方 Vibe __version__（当前 3.1.4）
+- 若推 GitHub：上游 build.yml 是全平台发布流水线，tag push 自动生成
+  release 资产 + checksums.txt（git tag v0.1.0 && push）

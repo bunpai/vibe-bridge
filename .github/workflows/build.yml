@@ -155,7 +155,7 @@ jobs:
         run: sha256sum --check checksums.txt
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: mistral-bridge-${{ needs.prepare.outputs.version }}
+          name: vibe-bridge-${{ needs.prepare.outputs.version }}
           path: dist/*
           if-no-files-found: error
           compression-level: 0
@@ -179,7 +179,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: mistral-bridge-${{ needs.prepare.outputs.version }}
+          name: vibe-bridge-${{ needs.prepare.outputs.version }}
           path: dist
       - name: Create or update draft and attach verified assets
         env:

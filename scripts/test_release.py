@@ -30,7 +30,7 @@ class ArtifactTests(unittest.TestCase):
             windows_arm64 = platforms["windows", "arm64"]
             self.assertEqual(windows_arm64["runner"], "windows-11-arm")
             self.assertEqual(windows_arm64["cc"], "clang")
-            self.assertEqual(windows_arm64["library"], "mistral-bridge.dll")
+            self.assertEqual(windows_arm64["library"], "vibe-bridge.dll")
             self.assertEqual(windows_arm64["cflags"], "-O2 -g -march=armv8-a")
 
     def test_versions_for_main_and_numeric_tags(self):
@@ -65,23 +65,23 @@ class ArtifactTests(unittest.TestCase):
                 self.assertEqual(digest, hashlib.sha256((output / name).read_bytes()).hexdigest())
             (output / "checksums.txt").write_text(checksums, encoding="utf-8")
             self.assertEqual(artifacts.checksum_content("1.2.3", output), checksums)
-            (output / "mistral-bridge_1.2.3_windows_arm64.zip").unlink()
-            with self.assertRaisesRegex(ValueError, "Missing:.*mistral-bridge_1.2.3_windows_arm64.zip"):
+            (output / "vibe-bridge_1.2.3_windows_arm64.zip").unlink()
+            with self.assertRaisesRegex(ValueError, "Missing:.*vibe-bridge_1.2.3_windows_arm64.zip"):
                 artifacts.checksum_content("1.2.3", output)
 
     def test_invalid_zip_layouts_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "test.zip"
-            for names in (("nested/mistral-bridge.so",), ("../mistral-bridge.so",),
-                          ("/mistral-bridge.so",), ("other.so",),
-                          ("mistral-bridge.so", "extra.so"), ("mistral-bridge.so", "mistral-bridge.h")):
+            for names in (("nested/vibe-bridge.so",), ("../vibe-bridge.so",),
+                          ("/vibe-bridge.so",), ("other.so",),
+                          ("vibe-bridge.so", "extra.so"), ("vibe-bridge.so", "vibe-bridge.h")):
                 with self.subTest(names=names):
                     with zipfile.ZipFile(archive, "w") as packaged:
                         for name in names:
                             packaged.writestr(name, b"binary")
                     with self.assertRaises(ValueError):
                         artifacts.verify_archive(archive, "linux")
-            link = zipfile.ZipInfo("mistral-bridge.so")
+            link = zipfile.ZipInfo("vibe-bridge.so")
             link.create_system = 3
             link.external_attr = 0o120777 << 16
             with zipfile.ZipFile(archive, "w") as packaged:

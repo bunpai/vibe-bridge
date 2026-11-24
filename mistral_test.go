@@ -84,7 +84,7 @@ func TestUpstreamStatusErrorMessageFormats(t *testing.T) {
 }
 
 func TestTransformRequestMistralThinking(t *testing.T) {
-	input := []byte(`{"model":"mistral-bridge/alias","reasoning_effort":"high","messages":[{"role":"user","content":"Question"},{"role":"assistant","content":"Earlier answer","reasoning_content":"Prior thought"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}],"reasoning_content":"Use the read tool"},{"role":"tool","tool_call_id":"call_1","content":"Done","reasoning_content":"discard"}]}`)
+	input := []byte(`{"model":"vibe-bridge/alias","reasoning_effort":"high","messages":[{"role":"user","content":"Question"},{"role":"assistant","content":"Earlier answer","reasoning_content":"Prior thought"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}],"reasoning_content":"Use the read tool"},{"role":"tool","tool_call_id":"call_1","content":"Done","reasoning_content":"discard"}]}`)
 	got, err := transformRequest(input, "mistral-large-4-0", "high=medium")
 	if err != nil {
 		t.Fatal(err)

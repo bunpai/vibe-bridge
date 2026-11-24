@@ -1,7 +1,7 @@
 (() => {
   const $ = id => document.getElementById(id);
-  const apiRoot = "/v0/management/plugins/mistral-bridge";
-  const sessionKeyName = "mistral-bridge-management-key";
+  const apiRoot = "/v0/management/plugins/vibe-bridge";
+  const sessionKeyName = "vibe-bridge-management-key";
   const panelStorageKey = "cli-proxy-auth";
   const storagePrefixes = ["enc::v1::", "enc::v2::"];
   const storageSalt = "cli-proxy-api-webui::secure-storage";
@@ -368,14 +368,14 @@
     $("publishNotice").classList.remove("hidden"); $("publishText").textContent = "正在同步模型到 CPA…"; $("retryPublish").disabled = true;
     try {
       let requestedRevision = snapshot.models_revision;
-      await request("/v0/management/plugins/mistral-bridge/config", jsonOptions("PATCH", { models_revision: requestedRevision }));
+      await request("/v0/management/plugins/vibe-bridge/config", jsonOptions("PATCH", { models_revision: requestedRevision }));
       for (let attempt = 0; attempt < 15; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 400));
         await loadState();
         if (snapshot.models_revision === snapshot.published_revision) { notify("模型列表已同步到 CPA"); return; }
         if (snapshot.models_revision !== requestedRevision) {
           requestedRevision = snapshot.models_revision;
-          await request("/v0/management/plugins/mistral-bridge/config", jsonOptions("PATCH", { models_revision: requestedRevision }));
+          await request("/v0/management/plugins/vibe-bridge/config", jsonOptions("PATCH", { models_revision: requestedRevision }));
         }
       }
       throw new Error("映射已保存，CPA 模型列表尚未完成同步，请点击重新同步");

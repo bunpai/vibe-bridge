@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "plugins": [
+    {
+      "id": "vibe-bridge",
+      "name": "Mistral Vibe Bridge",
+      "description": "Mistral Bridge fork that reproduces the official Mistral Vibe CLI request fingerprint (call_source=vibe_code, full telemetry metadata, Vibe User-Agent, x-affinity) so requests bill to the Vibe allowance. Also folds developer roles to system, fixing Mistral 422s for Responses-API clients.",
+      "author": "baozipai",
+      "version": "0.1.0",
+      "license": "MIT",
+      "tags": [
+        "Provider",
+        "Mistral",
+        "Vibe",
+        "Management",
+        "Usage",
+        "Logs"
+      ],
+      "locales": {
+        "zh-CN": {
+          "description": "Mistral Bridge 分叉版：完整复刻官方 Vibe CLI 请求指纹（call_source=vibe_code、全套遥测 metadata、Vibe User-Agent、x-affinity），使请求计入 Vibe 额度；并将 developer 角色折叠为 system，修复 Responses 客户端的 422。"
+        }
+      },
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "BASE_URL/vibe-bridge_0.1.0_linux_amd64.zip",
+            "sha256": "c0d846ff5cd2529199c0946be1a64e6ccc2cd1ae7960e219ca7eaaf6ec03228b"
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "BASE_URL/vibe-bridge_0.1.0_linux_arm64.zip",
+            "sha256": "339999efa5a51344ae64651ac54dd2feb7bb20cc8c2f01aac12c52b6c701ff1e"
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "BASE_URL/vibe-bridge_0.1.0_darwin_arm64.zip",
+            "sha256": "b5ba395db1065cfeaba595e654fc0e11ffe13639f3c33f94f2878dbe94189609"
+          }
+        ]
+      }
+    }
+  ]
+}

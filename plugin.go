@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	pluginID   = "mistral-bridge"
+	pluginID   = "vibe-bridge"
 	pluginName = "Mistral Bridge"
 )
 
@@ -307,24 +307,24 @@ func applyThinking(raw []byte) ([]byte, error) {
 
 func managementRoutes() []map[string]string {
 	paths := []struct{ method, path string }{
-		{"GET", "/plugins/mistral-bridge/state"},
-		{"PATCH", "/plugins/mistral-bridge/proxy"},
-		{"POST", "/plugins/mistral-bridge/keys"},
-		{"PATCH", "/plugins/mistral-bridge/keys"},
-		{"POST", "/plugins/mistral-bridge/keys/quota"},
-		{"PATCH", "/plugins/mistral-bridge/keys/channel"},
-		{"GET", "/plugins/mistral-bridge/logs"},
-		{"GET", "/plugins/mistral-bridge/logs/debug"},
-		{"PATCH", "/plugins/mistral-bridge/debug"},
-		{"DELETE", "/plugins/mistral-bridge/debug"},
-		{"PATCH", "/plugins/mistral-bridge/models"},
-		{"PATCH", "/plugins/mistral-bridge/keys/toggle"},
-		{"DELETE", "/plugins/mistral-bridge/keys/delete"},
-		{"POST", "/plugins/mistral-bridge/keys/test"},
-		{"POST", "/plugins/mistral-bridge/models/sync"},
-		{"POST", "/plugins/mistral-bridge/models"},
-		{"DELETE", "/plugins/mistral-bridge/models/delete"},
-		{"DELETE", "/plugins/mistral-bridge/logs"},
+		{"GET", "/plugins/vibe-bridge/state"},
+		{"PATCH", "/plugins/vibe-bridge/proxy"},
+		{"POST", "/plugins/vibe-bridge/keys"},
+		{"PATCH", "/plugins/vibe-bridge/keys"},
+		{"POST", "/plugins/vibe-bridge/keys/quota"},
+		{"PATCH", "/plugins/vibe-bridge/keys/channel"},
+		{"GET", "/plugins/vibe-bridge/logs"},
+		{"GET", "/plugins/vibe-bridge/logs/debug"},
+		{"PATCH", "/plugins/vibe-bridge/debug"},
+		{"DELETE", "/plugins/vibe-bridge/debug"},
+		{"PATCH", "/plugins/vibe-bridge/models"},
+		{"PATCH", "/plugins/vibe-bridge/keys/toggle"},
+		{"DELETE", "/plugins/vibe-bridge/keys/delete"},
+		{"POST", "/plugins/vibe-bridge/keys/test"},
+		{"POST", "/plugins/vibe-bridge/models/sync"},
+		{"POST", "/plugins/vibe-bridge/models"},
+		{"DELETE", "/plugins/vibe-bridge/models/delete"},
+		{"DELETE", "/plugins/vibe-bridge/logs"},
 	}
 	routes := make([]map[string]string, 0, len(paths))
 	for _, entry := range paths {
@@ -348,7 +348,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return managementPage(consolePage)
 	}
 	path = strings.TrimPrefix(path, "/v0/management")
-	path = strings.TrimPrefix(path, "/plugins/mistral-bridge")
+	path = strings.TrimPrefix(path, "/plugins/vibe-bridge")
 	if path == "" {
 		path = "/"
 	}
