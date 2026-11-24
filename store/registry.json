@@ -7,7 +7,7 @@
       "description": "Mistral Bridge 分叉版：完整复刻官方 Vibe CLI 请求指纹（call_source=vibe_code、全套遥测 metadata、Vibe User-Agent、x-affinity），使请求计入 Vibe 额度；并将 developer 角色折叠为 system，修复 Responses 客户端 422。",
       "author": "bunpai",
       "version": "0.1.0",
-      "repository": "bunpai/vibe-bridge",
+      "repository": "https://github.com/bunpai/vibe-bridge",
       "license": "MIT",
       "tags": [
         "Provider",
