@@ -3,16 +3,57 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 )
 
 const defaultBaseURL = "https://api.mistral.ai/v1"
+
+// vibeClientVersion mirrors the official Mistral Vibe CLI release whose request
+// shape we reproduce; bump it when Mistral changes the fingerprint.
+const vibeClientVersion = "3.1.4"
+
+// vibeUserAgent is the User-Agent official Vibe sends on the mistral backend
+// (mistral-client-python SDK prefix + Mistral-Vibe/version).
+const vibeUserAgent = "mistral-client-python/Mistral-Vibe/" + vibeClientVersion
+
+// vibeSessionID is one CPA process's Vibe session identity: official Vibe mints
+// a session id per CLI launch, so the bridge mints one per process lifetime.
+// It doubles as the x-affinity cache-routing token.
+var vibeSessionID = newVibeSessionID()
+
+// vibeOSVersion mirrors Vibe's telemetry os_version (a kernel/OS release string).
+var vibeOSVersion = detectOSVersion()
+
+// newVibeSessionID returns a random UUIDv4 string without new dependencies.
+func newVibeSessionID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return randomID()
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// detectOSVersion runs once at startup; empty when uname is unavailable.
+func detectOSVersion() string {
+	out, err := exec.Command("uname", "-r").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 type rpcExecutorRequest struct {
 	Model          string         `json:"Model"`
@@ -95,6 +136,9 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 	if req.Stream {
 		headers.Set("Accept", "text/event-stream")
 	}
+	for name, value := range vibeRequestHeaders(key) {
+		headers.Set(name, value)
+	}
 	callbackReq := upstreamRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Body: body, HostCallbackID: req.HostCallbackID}
 	trace.captureRequest(callbackReq.Method, callbackReq.URL, callbackReq.Headers, callbackReq.Body)
 	responseRaw, err := doUpstreamHTTP(ctx, callbackReq, settings.ProxyURL)
@@ -141,6 +185,9 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 		return nil, &statusError{Status: 500, Message: "Invalid Mistral API endpoint"}
 	}
 	headers := http.Header{"Authorization": []string{"Bearer " + key.Secret}, "Content-Type": []string{"application/json"}, "Accept": []string{"text/event-stream"}}
+	for name, value := range vibeRequestHeaders(key) {
+		headers.Set(name, value)
+	}
 	trace.captureRequest(http.MethodPost, endpoint, headers, body)
 	stream, err := openUpstreamHTTPStream(ctx, upstreamRequest{
 		Method: http.MethodPost, URL: endpoint, Headers: headers,
@@ -417,7 +464,7 @@ func applyKeyChannel(raw []byte, key apiKey) ([]byte, error) {
 		}
 	}
 	if channel == "vibe" {
-		metadata["call_source"] = json.RawMessage(`"vibe_code"`)
+		injectVibeMetadata(metadata)
 	} else {
 		delete(metadata, "call_source")
 	}
@@ -427,6 +474,46 @@ func applyKeyChannel(raw []byte, key apiKey) ([]byte, error) {
 		root["metadata"], _ = json.Marshal(metadata)
 	}
 	return json.Marshal(root)
+}
+
+// injectVibeMetadata stamps the full request attribution the official Mistral
+// Vibe CLI sends (TelemetryRequestMetadata), so the upstream meters the call
+// against the Vibe allowance exactly like a real Vibe session. Client-supplied
+// metadata keys win; only the quota marker itself is always overwritten.
+func injectVibeMetadata(metadata map[string]json.RawMessage) {
+	fill := func(key, value string) {
+		if _, exists := metadata[key]; !exists {
+			b, _ := json.Marshal(value)
+			metadata[key] = b
+		}
+	}
+	metadata["call_source"] = json.RawMessage(`"vibe_code"`)
+	fill("host_kind", "local")
+	fill("call_type", "main_call")
+	fill("version", vibeClientVersion)
+	fill("agent_version", vibeClientVersion)
+	fill("agent_entrypoint", "cli")
+	fill("client_name", "vibe-cli")
+	fill("client_version", vibeClientVersion)
+	fill("session_id", vibeSessionID)
+	fill("os", runtime.GOOS)
+	fill("arch", runtime.GOARCH)
+	if vibeOSVersion != "" {
+		fill("os_version", vibeOSVersion)
+	}
+}
+
+// vibeRequestHeaders returns the extra upstream headers official Vibe sends on
+// its mistral backend: the SDK-style User-Agent and the x-affinity cache route.
+// Nil for non-vibe channels so studio/auto traffic keeps its plain shape.
+func vibeRequestHeaders(key apiKey) map[string]string {
+	if activeChannel(key) != "vibe" {
+		return nil
+	}
+	return map[string]string{
+		"User-Agent": vibeUserAgent,
+		"X-Affinity": vibeSessionID,
+	}
 }
 
 func transformRequest(raw []byte, model, thinkingMap string) ([]byte, error) {
@@ -464,6 +551,12 @@ func transformRequest(raw []byte, model, thinkingMap string) ([]byte, error) {
 		}
 		var role string
 		_ = json.Unmarshal(message["role"], &role)
+		// Mistral only accepts system/user/assistant/tool. OpenAI Responses-style
+		// "developer" roles arrive from upstream converters and 422 upstream, so
+		// fold them into system here. Official Vibe never sends developer.
+		if role == "developer" {
+			message["role"], _ = json.Marshal("system")
+		}
 		var reasoning strings.Builder
 		for _, field := range []string{"reasoning_content", "reasoning", "reasoning_details"} {
 			if rawReasoning, exists := message[field]; exists {
