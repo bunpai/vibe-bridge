@@ -53,3 +53,22 @@
 - vibeClientVersion 跟随官方 Vibe __version__（当前 3.1.4）
 - 若推 GitHub：上游 build.yml 是全平台发布流水线，tag push 自动生成
   release 资产 + checksums.txt（git tag v0.1.0 && push）
+
+## GitHub 发布（已完成）
+- Repo: https://github.com/bunpai/vibe-bridge （main = vibe-fingerprint 分支内容）
+- Release v0.1.0 已发布，CI 自动生成 6 平台 zip + checksums.txt
+- Store registry: https://raw.githubusercontent.com/bunpai/vibe-bridge/main/store/registry.json （github-release 类型）
+- 本地端到端已验证：自定义源 → 列表 → install(github-release) → 热载 → 指纹/折叠正常
+- GitHub token: CPA 的 githubauth 自动读 GITHUB_TOKEN / github_token 环境变量；store-auth 支持 type: github-token + token-env
+
+## VPS Docker CPA 部署步骤
+1. 找到挂载进容器的 config.yaml（docker run -v 或 compose volumes）
+2. 添加插件源：
+   plugins:
+     enabled: true
+     store-sources:
+       - "https://raw.githubusercontent.com/bunpai/vibe-bridge/main/store/registry.json"
+3. （强烈建议）docker env 加 GITHUB_TOKEN=<PAT>——GitHub API 未认证限 60 次/小时/IP，VPS 共享出口易触发 plugin_store_rate_limited
+4. 重启容器，管理面板 → 插件 → 商店，来源选 "raw.githubusercontent.com"，安装 Mistral Vibe Bridge 0.1.0（热载，无需再重启）
+5. 在 vibe-bridge 插件控制台添加 Mistral key：channel=vibe、base_url=https://api.mistral.ai/v1、models 映射
+6. 官方源里 RzMY 的 mistral-bridge 与本插件 id 不同（vibe-bridge），可共存
