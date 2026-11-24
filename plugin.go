@@ -27,7 +27,7 @@ const (
 )
 
 // Release builds set this to the tag version with -ldflags -X.
-var pluginVersion = "0.3.1"
+var pluginVersion = "0.1.1"
 
 //go:embed web/index.html web/style.css web/app.js
 var webFiles embed.FS
@@ -65,6 +65,7 @@ type modelMapping struct {
 	ClientModel   string `json:"client_model"`
 	UpstreamModel string `json:"upstream_model"`
 	ThinkingMap   string `json:"thinking_map,omitempty"`
+	ImageLimit    int    `json:"image_limit,omitempty"`
 	KeyID         string `json:"key_id,omitempty"`
 	Enabled       bool   `json:"enabled"`
 }
@@ -93,12 +94,13 @@ type RequestLog struct {
 }
 
 type pluginState struct {
-	Keys      []apiKey       `json:"keys"`
-	Catalog   []string       `json:"catalog"`
-	Models    []modelMapping `json:"models"`
-	DebugMode bool           `json:"debug_mode,omitempty"`
-	ProxyURL  string         `json:"proxy_url,omitempty"`
-	Logs      []RequestLog   `json:"-"`
+	Keys       []apiKey       `json:"keys"`
+	Catalog    []string       `json:"catalog"`
+	Models     []modelMapping `json:"models"`
+	DebugMode  bool           `json:"debug_mode,omitempty"`
+	ProxyURL   string         `json:"proxy_url,omitempty"`
+	ImageLimit int            `json:"image_limit,omitempty"`
+	Logs       []RequestLog   `json:"-"`
 }
 
 type safeKey struct {

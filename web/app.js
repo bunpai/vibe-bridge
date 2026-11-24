@@ -388,7 +388,7 @@
   function openMapping(model = null) {
     $("modelForm").reset(); $("mappingId").value = model?.id || "";
     $("upstreamModel").value = model?.upstream_model || ""; $("clientModel").value = model?.client_model || "";
-    $("thinkingMap").value = model?.thinking_map || ""; $("mappingKey").value = model?.key_id || "";
+    $("thinkingMap").value = model?.thinking_map || ""; $("mappingKey").value = model?.key_id || ""; $("imageLimit").value = model?.image_limit ?? "";
     $("mappingEnabled").checked = model ? model.enabled : true;
     updateMappingEnabledLabel();
     $("modelDialogTitle").textContent = model ? "编辑模型映射" : "添加模型映射";
@@ -428,7 +428,7 @@
   $("modelForm").addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget;
-    const model = { id: $("mappingId").value, client_model: $("clientModel").value.trim(), upstream_model: $("upstreamModel").value.trim(), thinking_map: $("thinkingMap").value.trim(), key_id: $("mappingKey").value, enabled: $("mappingEnabled").checked };
+    const model = { id: $("mappingId").value, client_model: $("clientModel").value.trim(), upstream_model: $("upstreamModel").value.trim(), thinking_map: $("thinkingMap").value.trim(), image_limit: $("imageLimit").value === "" ? 0 : parseInt($("imageLimit").value, 10), key_id: $("mappingKey").value, enabled: $("mappingEnabled").checked };
     await busy(form.querySelector('[type="submit"]'), async () => {
       $("modelError").textContent = "";
       try { await api("/models", jsonOptions("POST", model)); }

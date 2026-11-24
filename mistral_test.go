@@ -30,7 +30,7 @@ func TestTransformRequestStripsContentCacheHints(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := transformRequest([]byte(test.input), "upstream", "")
+			got, err := transformRequest([]byte(test.input), "upstream", "", -1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -85,7 +85,7 @@ func TestUpstreamStatusErrorMessageFormats(t *testing.T) {
 
 func TestTransformRequestMistralThinking(t *testing.T) {
 	input := []byte(`{"model":"vibe-bridge/alias","reasoning_effort":"high","messages":[{"role":"user","content":"Question"},{"role":"assistant","content":"Earlier answer","reasoning_content":"Prior thought"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}],"reasoning_content":"Use the read tool"},{"role":"tool","tool_call_id":"call_1","content":"Done","reasoning_content":"discard"}]}`)
-	got, err := transformRequest(input, "mistral-large-4-0", "high=medium")
+	got, err := transformRequest(input, "mistral-large-4-0", "high=medium", -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestTransformRequestMistralThinking(t *testing.T) {
 }
 
 func TestTransformRequestDropsBlankReasoning(t *testing.T) {
-	got, err := transformRequest([]byte(`{"messages":[{"role":"assistant","content":null,"tool_calls":[],"reasoning_content":"  "}]}`), "m1", "")
+	got, err := transformRequest([]byte(`{"messages":[{"role":"assistant","content":null,"tool_calls":[],"reasoning_content":"  "}]}`), "m1", "", -1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -34,7 +34,7 @@ func TestVibeFingerprintInjection(t *testing.T) {
 
 func TestTransformRequestDeveloperToSystem(t *testing.T) {
 	raw := `{"messages":[{"role":"developer","content":"be nice"},{"role":"user","content":"hi"}]}`
-	got, err := transformRequest([]byte(raw), "m1", "")
+	got, err := transformRequest([]byte(raw), "m1", "", -1)
 	if err != nil {
 		t.Fatal(err)
 	}

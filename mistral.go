@@ -109,7 +109,7 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 		return nil, nil, &statusError{Status: 404, Message: "Mistral model mapping was not found"}
 	}
 	trace.resolved(key, model, req.Payload)
-	body, err := transformRequest(req.Payload, model.UpstreamModel, model.ThinkingMap)
+	body, err := transformRequest(req.Payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
 	if err == nil {
 		body, err = applyKeyChannel(body, key)
 	}
@@ -166,7 +166,7 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 		return nil, &statusError{Status: 404, Message: "Mistral model mapping was not found"}
 	}
 	trace.resolved(key, model, req.Payload)
-	body, err := transformRequest(req.Payload, model.UpstreamModel, model.ThinkingMap)
+	body, err := transformRequest(req.Payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
 	if err == nil {
 		body, err = applyKeyChannel(body, key)
 	}
@@ -516,7 +516,22 @@ func vibeRequestHeaders(key apiKey) map[string]string {
 	}
 }
 
-func transformRequest(raw []byte, model, thinkingMap string) ([]byte, error) {
+// officialMaxRequestImages mirrors Vibe's _MAX_REQUEST_IMAGES client-side cap.
+const officialMaxRequestImages = 8
+
+// imageLimitFor resolves the per-request image cap: model override wins, then the
+// plugin-level default, then official parity. Negative disables trimming.
+func imageLimitFor(settings pluginState, model modelMapping) int {
+	if model.ImageLimit != 0 {
+		return model.ImageLimit
+	}
+	if settings.ImageLimit != 0 {
+		return settings.ImageLimit
+	}
+	return officialMaxRequestImages
+}
+
+func transformRequest(raw []byte, model, thinkingMap string, imageLimit int) ([]byte, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, err
@@ -585,8 +600,48 @@ func transformRequest(raw []byte, model, thinkingMap string) ([]byte, error) {
 		}
 		message["content"], _ = json.Marshal(parts)
 	}
+	if imageLimit >= 0 {
+		trimRequestImages(messages, imageLimit)
+	}
 	root["messages"], _ = json.Marshal(messages)
 	return json.Marshal(root)
+}
+
+// trimRequestImages replicates Vibe's _keep_recent_images: walking messages from
+// newest to oldest, every image_url part beyond the limit is replaced in place
+// with a text placeholder so the request stays within the upstream cap.
+func trimRequestImages(messages []map[string]json.RawMessage, limit int) {
+	placeholder, _ := json.Marshal(map[string]string{
+		"type": "text",
+		"text": fmt.Sprintf("[Image removed: only the %d most recent images are sent]", limit),
+	})
+	kept := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		var contentParts []json.RawMessage
+		if json.Unmarshal(messages[i]["content"], &contentParts) != nil {
+			continue
+		}
+		changed := false
+		for j := len(contentParts) - 1; j >= 0; j-- {
+			var part map[string]json.RawMessage
+			if json.Unmarshal(contentParts[j], &part) != nil {
+				continue
+			}
+			var partType string
+			if json.Unmarshal(part["type"], &partType) != nil || partType != "image_url" {
+				continue
+			}
+			if kept < limit {
+				kept++
+				continue
+			}
+			contentParts[j] = placeholder
+			changed = true
+		}
+		if changed {
+			messages[i]["content"], _ = json.Marshal(contentParts)
+		}
+	}
 }
 
 func extractReasoning(raw json.RawMessage) string {
