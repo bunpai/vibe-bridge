@@ -496,11 +496,24 @@ func injectVibeMetadata(metadata map[string]json.RawMessage) {
 	fill("client_name", "vibe-cli")
 	fill("client_version", vibeClientVersion)
 	fill("session_id", vibeSessionID)
+	fill("terminal_emulator", "unknown")
+	fill("message_id", newVibeMessageID())
 	fill("os", runtime.GOOS)
 	fill("arch", runtime.GOARCH)
 	if vibeOSVersion != "" {
 		fill("os_version", vibeOSVersion)
 	}
+}
+
+// newVibeMessageID mirrors the official Vibe turn id format
+// ("user-turn-<32 hex>-<turn index>"). Each proxied call is its own turn,
+// so the suffix is always 1.
+func newVibeMessageID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "user-turn-" + randomID() + "-1"
+	}
+	return fmt.Sprintf("user-turn-%x-1", b)
 }
 
 // vibeRequestHeaders returns the extra upstream headers official Vibe sends on
