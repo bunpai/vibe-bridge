@@ -498,6 +498,8 @@ func injectVibeMetadata(metadata map[string]json.RawMessage) {
 	fill("session_id", vibeSessionID)
 	fill("terminal_emulator", "unknown")
 	fill("message_id", newVibeMessageID())
+	// Official client reports the account's product plan (Pro) in metadata.
+	fill("user_plan", "Pro")
 	fill("os", runtime.GOOS)
 	fill("arch", runtime.GOARCH)
 	if vibeOSVersion != "" {
