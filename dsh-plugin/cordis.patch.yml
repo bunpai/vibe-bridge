@@ -1,0 +1,10 @@
+# dsh-vibe-search bundle patch.
+#
+# Mounted automatically when the profile's package.json lists "dsh-vibe-search"
+# in dsh.profile.bundles; registers the connector tools into the host tools
+# registry. To expose them inside a Web session's agent preset, add a row
+# `- { id: vibe-search, name: 'dsh-vibe-search' }` to that preset's plugins
+# list (same mechanism as dsh-tgrep).
+- insert:
+    - id: dsh-vibe-search
+      name: 'dsh-vibe-search'
