@@ -109,12 +109,27 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 		return nil, nil, &statusError{Status: 404, Message: "Mistral model mapping was not found"}
 	}
 	trace.resolved(key, model, req.Payload)
-	body, err := transformRequest(req.Payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
+	if dir := parseConnectorDirective(req.Payload); dir != nil {
+		result, errDir := executeConnectorTool(ctx, key, req.HostCallbackID, dir.Tool, dir.Args)
+		if errDir != nil {
+			return nil, nil, &statusError{Status: 502, Message: "Connector execution failed: " + errDir.Error()}
+		}
+		trace.completeResponse()
+		return synthChatCompletion(req.Model, result), http.Header{"Content-Type": []string{"application/json"}}, nil
+	}
+	payload := stripConnectorFields(req.Payload)
+	body, err := transformRequest(payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
 	if err == nil {
 		body, err = applyKeyChannel(body, key)
 	}
 	if err != nil {
 		return nil, nil, &statusError{Status: 400, Message: "Invalid chat completion request"}
+	}
+	if names, wantTools := wantsConnectorTools(req.Payload); wantTools {
+		body, err = injectConnectorTools(body, names)
+		if err != nil {
+			return nil, nil, &statusError{Status: 400, Message: "Invalid connector tool injection"}
+		}
 	}
 	if req.Stream {
 		body, err = setJSONField(body, "stream", true)
@@ -156,6 +171,43 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 		return nil, nil, upstreamStatusError(response.StatusCode, response.Body)
 	}
 	result, err := normalizeCompletion(response.Body)
+	if err == nil && !req.Stream {
+		if _, wantLoop := wantsConnectorTools(req.Payload); wantLoop {
+			for round := 0; round < 4; round++ {
+				assistant, calls, e := extractConnectorCalls(result)
+				if e != nil || len(calls) == 0 {
+					break
+				}
+				results := make([]connectorResult, 0, len(calls))
+				for _, c := range calls {
+					content, cerr := executeConnectorTool(ctx, key, req.HostCallbackID, c.Name, c.Args)
+					if cerr != nil {
+						content = "connector error: " + cerr.Error()
+					}
+					results = append(results, connectorResult{id: c.ID, content: content})
+				}
+				if body, err = appendConnectorResults(body, assistant, results); err != nil {
+					break
+				}
+				callbackReq.Body = body
+				trace.captureRequest(callbackReq.Method, callbackReq.URL, callbackReq.Headers, callbackReq.Body)
+				responseRaw, err = doUpstreamHTTP(ctx, callbackReq, settings.ProxyURL)
+				if err != nil {
+					break
+				}
+				if err = json.Unmarshal(responseRaw, &response); err != nil {
+					break
+				}
+				trace.captureResponse(response.StatusCode, response.Headers, response.Body, true)
+				if response.StatusCode < 200 || response.StatusCode > 299 {
+					return nil, nil, upstreamStatusError(response.StatusCode, response.Body)
+				}
+				if result, err = normalizeCompletion(response.Body); err != nil {
+					break
+				}
+			}
+		}
+	}
 	return result, response.Headers, err
 }
 
@@ -166,7 +218,20 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 		return nil, &statusError{Status: 404, Message: "Mistral model mapping was not found"}
 	}
 	trace.resolved(key, model, req.Payload)
-	body, err := transformRequest(req.Payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
+	if dir := parseConnectorDirective(req.Payload); dir != nil {
+		go func() {
+			result, errDir := executeConnectorTool(ctx, key, req.HostCallbackID, dir.Tool, dir.Args)
+			if errDir != nil {
+				hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "connector: " + errDir.Error()})
+				hostCall("host.stream.close", map[string]any{"stream_id": req.StreamID})
+				return
+			}
+			emitSynthesizedStream(req, result)
+		}()
+		return http.Header{"content-type": []string{"text/event-stream"}}, nil
+	}
+	payload := stripConnectorFields(req.Payload)
+	body, err := transformRequest(payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
 	if err == nil {
 		body, err = applyKeyChannel(body, key)
 	}
