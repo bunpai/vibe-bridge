@@ -100,6 +100,7 @@ type pluginState struct {
 	DebugMode  bool           `json:"debug_mode,omitempty"`
 	ProxyURL   string         `json:"proxy_url,omitempty"`
 	ImageLimit int            `json:"image_limit,omitempty"`
+	ConnectorMode string      `json:"connector_mode,omitempty"`
 	Logs       []RequestLog   `json:"-"`
 }
 
@@ -318,6 +319,7 @@ func managementRoutes() []map[string]string {
 		{"GET", "/plugins/vibe-bridge/logs"},
 		{"GET", "/plugins/vibe-bridge/logs/debug"},
 		{"PATCH", "/plugins/vibe-bridge/debug"},
+		{"PATCH", "/plugins/vibe-bridge/connector-mode"},
 		{"DELETE", "/plugins/vibe-bridge/debug"},
 		{"PATCH", "/plugins/vibe-bridge/models"},
 		{"PATCH", "/plugins/vibe-bridge/keys/toggle"},
@@ -373,6 +375,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return queryDebugLog(req.Query)
 	case method == http.MethodPatch && path == "/debug":
 		return updateDebugMode(req.Body)
+	case method == http.MethodPatch && path == "/connector-mode":
+		return updateConnectorMode(req.Body)
 	case method == http.MethodDelete && path == "/debug":
 		if err := clearDebugLogs(); err != nil {
 			return managementJSONStatus(http.StatusInternalServerError, map[string]string{"error": "could not clear debug data"})
@@ -846,6 +850,8 @@ func currentState() pluginState {
 		Models:    append([]modelMapping{}, state.Models...),
 		DebugMode: state.DebugMode,
 		ProxyURL:  state.ProxyURL,
+		ImageLimit: state.ImageLimit,
+		ConnectorMode: state.ConnectorMode,
 	}
 }
 
@@ -858,7 +864,7 @@ func publicState() map[string]any {
 	stateMu.RLock()
 	published := publishedRevision
 	stateMu.RUnlock()
-	return map[string]any{"keys": keys, "catalog": snapshot.Catalog, "models": snapshot.Models, "debug_mode": snapshot.DebugMode, "proxy_url": snapshot.ProxyURL, "models_revision": modelRevision(snapshot.Models), "published_revision": published}
+	return map[string]any{"keys": keys, "catalog": snapshot.Catalog, "models": snapshot.Models, "debug_mode": snapshot.DebugMode, "proxy_url": snapshot.ProxyURL, "connector_mode": connectorModeOf(snapshot), "models_revision": modelRevision(snapshot.Models), "published_revision": published}
 }
 
 func publicKey(key apiKey) safeKey {
@@ -1115,4 +1121,34 @@ func configureDataDirectory(authDir string) {
 		dataDir = authDir
 	}
 	dataMu.Unlock()
+}
+
+
+// connector mode: "off" disables all connector features, "directive" (default)
+// executes only explicit x_vibe_connector directives, "loop" additionally
+// injects connector tools and auto-executes them (multi-round).
+func connectorModeOf(st pluginState) string {
+	switch st.ConnectorMode {
+	case "off", "loop":
+		return st.ConnectorMode
+	default:
+		return "directive"
+	}
+}
+
+func updateConnectorMode(body []byte) ([]byte, error) {
+	var input struct {
+		Mode string `json:"connector_mode"`
+	}
+	if err := json.Unmarshal(body, &input); err != nil {
+		return managementJSONStatus(http.StatusBadRequest, map[string]string{"error": "invalid connector_mode payload"})
+	}
+	mode := strings.ToLower(strings.TrimSpace(input.Mode))
+	if mode != "off" && mode != "directive" && mode != "loop" {
+		return managementJSONStatus(http.StatusBadRequest, map[string]string{"error": "connector_mode must be off, directive or loop"})
+	}
+	if err := mutateState(func(s *pluginState) error { s.ConnectorMode = mode; return nil }); err != nil {
+		return managementJSONStatus(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return managementJSON(publicState())
 }

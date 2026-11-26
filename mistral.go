@@ -10,10 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const defaultBaseURL = "https://api.mistral.ai/v1"
@@ -109,7 +111,7 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 		return nil, nil, &statusError{Status: 404, Message: "Mistral model mapping was not found"}
 	}
 	trace.resolved(key, model, req.Payload)
-	if dir := parseConnectorDirective(req.Payload); dir != nil {
+	if dir := parseConnectorDirective(req.Payload); dir != nil && connectorModeOf(settings) != "off" {
 		result, errDir := executeConnectorTool(ctx, key, req.HostCallbackID, dir.Tool, dir.Args)
 		if errDir != nil {
 			return nil, nil, &statusError{Status: 502, Message: "Connector execution failed: " + errDir.Error()}
@@ -125,7 +127,7 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 	if err != nil {
 		return nil, nil, &statusError{Status: 400, Message: "Invalid chat completion request"}
 	}
-	if names, wantTools := wantsConnectorTools(req.Payload); wantTools {
+	if names, wantTools := wantsConnectorTools(req.Payload); wantTools && connectorModeOf(settings) == "loop" {
 		body, err = injectConnectorTools(body, names)
 		if err != nil {
 			return nil, nil, &statusError{Status: 400, Message: "Invalid connector tool injection"}
@@ -172,7 +174,7 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 	}
 	result, err := normalizeCompletion(response.Body)
 	if err == nil && !req.Stream {
-		if _, wantLoop := wantsConnectorTools(req.Payload); wantLoop {
+		if _, wantLoop := wantsConnectorTools(req.Payload); wantLoop && connectorModeOf(settings) == "loop" {
 			for round := 0; round < 4; round++ {
 				assistant, calls, e := extractConnectorCalls(result)
 				if e != nil || len(calls) == 0 {
@@ -218,7 +220,7 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 		return nil, &statusError{Status: 404, Message: "Mistral model mapping was not found"}
 	}
 	trace.resolved(key, model, req.Payload)
-	if dir := parseConnectorDirective(req.Payload); dir != nil {
+	if dir := parseConnectorDirective(req.Payload); dir != nil && connectorModeOf(settings) != "off" {
 		go func() {
 			result, errDir := executeConnectorTool(ctx, key, req.HostCallbackID, dir.Tool, dir.Args)
 			if errDir != nil {
@@ -234,6 +236,11 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 	body, err := transformRequest(payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
 	if err == nil {
 		body, err = applyKeyChannel(body, key)
+	}
+	connectorNames, wantConnectorLoop := wantsConnectorTools(req.Payload)
+	wantConnectorLoop = wantConnectorLoop && connectorModeOf(settings) == "loop"
+	if err == nil && wantConnectorLoop {
+		body, err = injectConnectorTools(body, connectorNames)
 	}
 	if err == nil {
 		body, err = setJSONField(body, "stream", true)
@@ -281,7 +288,11 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 		trace.captureResponseError(errors.New("Mistral stream was not opened"))
 		return nil, &statusError{Status: 502, Message: "Mistral stream was not opened"}
 	}
-	go relayStream(req, stream, trace)
+	var loop *streamLoopCtx
+	if wantConnectorLoop {
+		loop = &streamLoopCtx{ctx: ctx, key: key, settings: settings, body: body}
+	}
+	go relayStream(req, stream, trace, loop)
 	return http.Header{"content-type": []string{"text/event-stream"}}, nil
 }
 
@@ -309,85 +320,361 @@ func readStreamErrorBody(req rpcExecutorRequest, stream upstreamStreamResponse, 
 	}
 }
 
-func relayStream(req rpcExecutorRequest, stream upstreamStreamResponse, trace *requestTrace) {
+
+func dbgTrace(msg string) {
+	f, err := os.OpenFile("/Users/baozipai/Documents/dsh/cpa-test/relay-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format("15:04:05.000"), msg)
+}
+
+type streamLoopCtx struct {
+	ctx      context.Context
+	key      apiKey
+	settings pluginState
+	body     []byte
+}
+
+// relayStream relays upstream SSE to the downstream client. When connector
+// tools are enabled (loop != nil), tool_call deltas are buffered instead of
+// forwarded; if the stream ends with connector_* calls only, the calls are
+// executed via the connector gateway and a fresh upstream stream is opened
+// for the next round — preserving real streaming of the final answer.
+func relayStream(req rpcExecutorRequest, stream upstreamStreamResponse, trace *requestTrace, loop *streamLoopCtx) {
 	var streamErr error
 	var usage map[string]int
 	defer func() { trace.finish(usage, streamErr) }()
-	defer stream.close(req.HostCallbackID)
 	defer hostCall("host.stream.close", map[string]any{"stream_id": req.StreamID})
-	var pending []byte
-	for {
-		chunk, err := stream.read(req.HostCallbackID)
-		if err != nil {
-			streamErr = &statusError{502, "Mistral 流式响应中断"}
-			trace.captureResponseError(err)
-			hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "Mistral stream read failed"})
-			return
+
+	cur := stream
+	var spent []upstreamStreamResponse
+	defer func() {
+		for _, s := range spent {
+			s.close(req.HostCallbackID)
 		}
-		trace.captureResponseChunk(chunk.Payload)
-		if chunk.Error != "" {
-			streamErr = &statusError{502, "Mistral 流式响应中断"}
-			trace.captureResponseError(errors.New(chunk.Error))
-			hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "Mistral stream failed"})
-			return
+	}()
+
+	emitCount := 0
+	emit := func(payload []byte) bool {
+		emitCount++
+		rawEmit, errEmit := hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": payload})
+		pv := string(payload); if len(pv) > 60 { pv = pv[:60] }
+		dbgTrace(fmt.Sprintf("emit #%d ok=%v rawlen=%d payload=%s", emitCount, errEmit == nil, len(rawEmit), pv))
+		if errEmit != nil {
+			trace.captureResponseError(fmt.Errorf("stream emit failed: %w", errEmit))
+			dbgTrace("emit failed: " + errEmit.Error())
+			streamErr = &statusError{499, "客户端已断开连接"}
+			if !trace.capturesDebug() {
+				return false
+			}
+			if err := drainUpstreamStream(req, cur, trace); err != nil {
+				trace.captureResponseError(err)
+			}
+			return false
 		}
-		pending = append(pending, chunk.Payload...)
+		return true
+	}
+
+	for round := 0; round < 5; round++ {
+		var suppressed [][]byte
+		names := map[int]string{}
+		passAll := false
+		var pending []byte
+		fatal := false
+
 		for {
-			lineEnd := bytes.IndexByte(pending, '\n')
-			if lineEnd < 0 {
-				break
-			}
-			line := append([]byte(nil), pending[:lineEnd+1]...)
-			pending = pending[lineEnd+1:]
-			if lineUsage := parseSSEUsage(line); lineUsage != nil {
-				usage = lineUsage
-			}
-			processed, errLine := normalizeSSELine(line)
-			if errLine != nil {
+			chunk, err := cur.read(req.HostCallbackID)
+			if err != nil {
 				streamErr = &statusError{502, "Mistral 流式响应中断"}
-				trace.captureResponseError(errLine)
-				hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "Invalid Mistral stream event"})
-				if trace.capturesDebug() {
-					if err := drainUpstreamStream(req, stream, trace); err != nil {
-						trace.captureResponseError(err)
-					}
-				}
+				trace.captureResponseError(err)
+				hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "Mistral stream read failed"})
 				return
 			}
-			if len(processed) > 0 {
-				trace.observe(processed)
-				if _, errEmit := hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": processed}); errEmit != nil {
-					streamErr = &statusError{499, "客户端已断开连接"}
-					if !trace.capturesDebug() {
-						return
-					}
-					if err := drainUpstreamStream(req, stream, trace); err != nil {
-						trace.captureResponseError(err)
+			trace.captureResponseChunk(chunk.Payload)
+			if chunk.Error != "" {
+				streamErr = &statusError{502, "Mistral 流式响应中断"}
+				trace.captureResponseError(errors.New(chunk.Error))
+				hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "Mistral stream failed"})
+				return
+			}
+			pending = append(pending, chunk.Payload...)
+			for {
+				lineEnd := bytes.IndexByte(pending, '\n')
+				if lineEnd < 0 {
+					break
+				}
+				line := append([]byte(nil), pending[:lineEnd+1]...)
+				pending = pending[lineEnd+1:]
+				if lineUsage := parseSSEUsage(line); lineUsage != nil {
+					usage = lineUsage
+				}
+				processed, errLine := normalizeSSELine(line)
+				if errLine != nil {
+					streamErr = &statusError{502, "Mistral 流式响应中断"}
+					trace.captureResponseError(errLine)
+					hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "Invalid Mistral stream event"})
+					if trace.capturesDebug() {
+						if err := drainUpstreamStream(req, cur, trace); err != nil {
+							trace.captureResponseError(err)
+						}
 					}
 					return
 				}
+				if len(processed) == 0 {
+					continue
+				}
+				trace.observe(processed)
+				kind, idxs, nms := sseClassify(processed)
+				if loop != nil && kind == "tool_call" && !passAll {
+					for i, ix := range idxs {
+						if nms[i] != "" {
+							names[ix] = nms[i]
+							if !strings.HasPrefix(nms[i], "connector_") {
+								passAll = true
+							}
+						}
+					}
+					if passAll {
+						for _, l := range suppressed {
+							if !emit(l) {
+								return
+							}
+						}
+						suppressed = nil
+						if !emit(processed) {
+							return
+						}
+					} else {
+						suppressed = append(suppressed, processed)
+					}
+				} else if loop != nil && kind == "finish" && len(suppressed) > 0 && !passAll {
+					suppressed = append(suppressed, processed)
+				} else if len(processed) > 0 {
+					if !emit(processed) {
+						return
+					}
+				}
+			}
+			if chunk.Done {
+				trace.completeResponse()
+				// flush leftover bytes
+				if len(pending) > 0 {
+					if lineUsage := parseSSEUsage(pending); lineUsage != nil {
+						usage = lineUsage
+					}
+					processed, errLine := normalizeSSELine(pending)
+					if errLine == nil && len(processed) > 0 {
+						trace.observe(processed)
+						emit(processed)
+					} else if errLine != nil {
+						streamErr = &statusError{502, "Mistral 流式响应中断"}
+						trace.captureResponseError(errLine)
+					}
+				}
+				break
 			}
 		}
-		if chunk.Done {
-			trace.completeResponse()
-			if len(pending) > 0 {
-				if lineUsage := parseSSEUsage(pending); lineUsage != nil {
-					usage = lineUsage
-				}
-				processed, errLine := normalizeSSELine(pending)
-				if errLine == nil && len(processed) > 0 {
-					trace.observe(processed)
-					if _, err := hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": processed}); err != nil {
-						streamErr = &statusError{499, "客户端已断开连接"}
-					}
-				} else if errLine != nil {
-					streamErr = &statusError{502, "Mistral 流式响应中断"}
-					trace.captureResponseError(errLine)
+		if fatal {
+			return
+		}
+		// round end: decide loop vs finish
+		dbgTrace(fmt.Sprintf("round %d end suppressed=%d passAll=%v loop=%v", round, len(suppressed), passAll, loop != nil))
+		if loop == nil || passAll || len(suppressed) == 0 {
+			for _, l := range suppressed {
+				if !emit(l) {
+					return
 				}
 			}
 			return
 		}
+		// every seen tool_call must be a connector call to continue looping
+		assistant, calls := assembleStreamCalls(suppressed)
+		dbgTrace(fmt.Sprintf("assemble calls=%d allConn=%v names=%v", len(calls), allConnectorCalls(names), names))
+		if len(calls) == 0 || !allConnectorCalls(names) {
+			for _, l := range suppressed {
+				if !emit(l) {
+					return
+				}
+			}
+			return
+		}
+		// execute connector calls, append results, open next upstream stream
+		results := make([]connectorResult, 0, len(calls))
+		for _, c := range calls {
+			content, cerr := executeConnectorTool(loop.ctx, loop.key, req.HostCallbackID, c.Name, c.Args)
+			if cerr != nil {
+				content = "connector error: " + cerr.Error()
+			}
+			results = append(results, connectorResult{id: c.ID, content: content})
+		}
+		nextBody, errAppend := appendConnectorResults(loop.body, assistant, results)
+		if errAppend != nil {
+			streamErr = &statusError{502, "Mistral 流式响应中断"}
+			return
+		}
+		loop.body = nextBody
+		next, errNext := openConnectorStreamRound(loop, req)
+		if errNext != nil {
+			streamErr = &statusError{502, "Mistral 流式响应中断"}
+			trace.captureResponseError(errNext)
+			hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "error": "Mistral stream reopen failed"})
+			return
+		}
+		spent = append(spent, cur)
+		cur = next
+		dbgTrace(fmt.Sprintf("round %d reopen ok", round))
+		// continue to next round
 	}
+}
+
+// openConnectorStreamRound opens a fresh upstream stream for a connector loop round.
+func openConnectorStreamRound(loop *streamLoopCtx, req rpcExecutorRequest) (upstreamStreamResponse, error) {
+	endpoint, err := completionURL(loop.key.BaseURL)
+	if err != nil {
+		return upstreamStreamResponse{}, err
+	}
+	headers := http.Header{"Authorization": []string{"Bearer " + loop.key.Secret}, "Content-Type": []string{"application/json"}, "Accept": []string{"text/event-stream"}}
+	for name, value := range vibeRequestHeaders(loop.key) {
+		headers.Set(name, value)
+	}
+	return openUpstreamHTTPStream(loop.ctx, upstreamRequest{
+		Method: http.MethodPost, URL: endpoint, Headers: headers,
+		Body: loop.body, HostCallbackID: req.HostCallbackID,
+	}, loop.settings.ProxyURL)
+}
+
+// sseClassify inspects an SSE data line: returns "tool_call" when the delta
+// carries tool_calls, "finish" when it carries finish_reason or is a usage
+// frame, else "normal". Also reports per-index function names for tool calls.
+func sseClassify(line []byte) (string, []int, []string) {
+	t := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(t, []byte("data:")) {
+		return "normal", nil, nil
+	}
+	payload := bytes.TrimSpace(t[5:])
+	var root struct {
+		Choices []struct {
+			Delta struct {
+				ToolCalls []struct {
+					Index    int `json:"index"`
+					Function struct {
+						Name string `json:"name"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason any `json:"finish_reason"`
+		} `json:"choices"`
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(payload, &root); err != nil {
+		return "normal", nil, nil
+	}
+	if len(root.Usage) > 0 && string(root.Usage) != "null" {
+		return "finish", nil, nil
+	}
+	if len(root.Choices) == 0 {
+		return "normal", nil, nil
+	}
+	if len(root.Choices[0].Delta.ToolCalls) > 0 {
+		var idxs []int
+		var nms []string
+		for _, tc := range root.Choices[0].Delta.ToolCalls {
+			idxs = append(idxs, tc.Index)
+			nms = append(nms, tc.Function.Name)
+		}
+		return "tool_call", idxs, nms
+	}
+	if root.Choices[0].FinishReason != nil {
+		return "finish", nil, nil
+	}
+	return "normal", nil, nil
+}
+
+func allConnectorCalls(names map[int]string) bool {
+	if len(names) == 0 {
+		return false
+	}
+	for _, n := range names {
+		if !strings.HasPrefix(n, "connector_") {
+			return false
+		}
+	}
+	return true
+}
+
+// assembleStreamCalls merges buffered tool_call delta chunks into complete
+// calls and builds the replayable assistant message.
+func assembleStreamCalls(lines [][]byte) (json.RawMessage, []connectorCall) {
+	type acc struct {
+		id, name, args string
+	}
+	merged := map[int]*acc{}
+	var order []int
+	for _, line := range lines {
+		t := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(t, []byte("data:")) {
+			continue
+		}
+		var root struct {
+			Choices []struct {
+				Delta struct {
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(bytes.TrimSpace(t[5:]), &root); err != nil {
+			continue
+		}
+		if len(root.Choices) == 0 {
+			continue
+		}
+		for _, tc := range root.Choices[0].Delta.ToolCalls {
+			a, ok := merged[tc.Index]
+			if !ok {
+				a = &acc{}
+				merged[tc.Index] = a
+				order = append(order, tc.Index)
+			}
+			if tc.ID != "" {
+				a.id = tc.ID
+			}
+			if tc.Function.Name != "" {
+				a.name = tc.Function.Name
+			}
+			a.args += tc.Function.Arguments
+		}
+	}
+	var calls []connectorCall
+	var toolCalls []map[string]any
+	for _, ix := range order {
+		a := merged[ix]
+		if a.name == "" {
+			continue
+		}
+		var args map[string]any
+		_ = json.Unmarshal([]byte(a.args), &args)
+		tool := a.name
+		if i := strings.LastIndex(tool, "."); i >= 0 {
+			tool = tool[i+1:]
+		}
+		calls = append(calls, connectorCall{ID: a.id, Name: tool, Args: args})
+		toolCalls = append(toolCalls, map[string]any{
+			"id": a.id, "type": "function",
+			"function": map[string]any{"name": a.name, "arguments": a.args},
+		})
+	}
+	assistant, _ := json.Marshal(map[string]any{"role": "assistant", "tool_calls": toolCalls})
+	return assistant, calls
 }
 
 func drainUpstreamStream(req rpcExecutorRequest, stream upstreamStreamResponse, trace *requestTrace) error {
