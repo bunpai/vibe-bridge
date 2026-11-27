@@ -20,12 +20,12 @@ export const inject = ['tools']
 export const Config = z.object({
   // Provider name inside llm-pi-ai config to inherit the endpoint from.
   // Empty = 'cpa' (falls back to the first provider when absent).
-  provider: z.string().default(''),
+  provider: z.string().default('').volatile(),
   // Empty = inherit from the selected provider.
-  base_url: z.string().default(''),
-  api_key: z.string().default(''),
-  model: z.string().default(''),
-  timeout_ms: z.number().default(60000),
+  base_url: z.string().default('').volatile(),
+  api_key: z.string().default('').volatile(),
+  model: z.string().default('').volatile(),
+  timeout_ms: z.number().default(60000).volatile(),
 })
 
 /**
@@ -56,8 +56,11 @@ function resolveGateway(ctx, config) {
   return { baseUrl: String(base_url ?? '').replace(/\/+$/, '').replace(/\/v1$/, ''), apiKey: api_key ?? '', model: model ?? '' }
 }
 
+function unbox(v) { return v !== null && typeof v === 'object' && typeof v.get === 'function' ? v.get() : v }
+
 export function apply(ctx, rawConfig) {
-  const config = { provider: '', base_url: '', api_key: '', model: '', timeout_ms: 60000, ...(rawConfig ?? {}) }
+  const merged = { provider: '', base_url: '', api_key: '', model: '', timeout_ms: 60000, ...(rawConfig ?? {}) }
+  const config = Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, unbox(v)]))
 
   ctx.tools.register(defineTool({
     name: 'vibe_web_search',
