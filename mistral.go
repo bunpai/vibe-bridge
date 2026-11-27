@@ -1033,6 +1033,29 @@ func transformRequest(raw []byte, model, thinkingMap string, imageLimit int) ([]
 	}
 	modelJSON, _ := json.Marshal(model)
 	root["model"] = modelJSON
+	// OpenAI-dialect compatibility: Mistral validates chat completion requests
+	// with extra=forbid and answers 422 "extra inputs are not permitted" for
+	// unknown top-level fields. Convert the ones with a Mistral equivalent and
+	// strip the ones without — empirical table (2026-11, zai-glm-5-3):
+	//   422: max_completion_tokens, store, seed, user, logit_bias
+	//   400: top_logprobs (unsupported param)
+	//   tolerated: stream_options, logprobs, penalties, n, response_format,
+	//   parallel_tool_calls, tool_choice, temperature, top_p, stop
+	if value, exists := root["max_completion_tokens"]; exists {
+		if _, has := root["max_tokens"]; !has {
+			root["max_tokens"] = value
+		}
+		delete(root, "max_completion_tokens")
+	}
+	if value, exists := root["seed"]; exists {
+		if _, has := root["random_seed"]; !has {
+			root["random_seed"] = value
+		}
+		delete(root, "seed")
+	}
+	for _, field := range []string{"store", "user", "logit_bias", "top_logprobs"} {
+		delete(root, field)
+	}
 	if effort, ok := rawString(root["reasoning_effort"]); ok {
 		if mapped := mapThinking(effort, thinkingMap); mapped != "" {
 			root["reasoning_effort"], _ = json.Marshal(mapped)
