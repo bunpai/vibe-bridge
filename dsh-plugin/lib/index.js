@@ -68,8 +68,9 @@ export function apply(ctx, rawConfig) {
       'Search the live web through Mistral cloud connectors (runs inside the vibe-bridge CPA gateway, billed to the Vibe quota). '
       + 'Prefer this over web_search when you need current news, weather or finance snippets from the Mistral connector network.',
     parameters: {
-      query: { type: 'string', required: true, description: 'Search query in natural language' },
-      search_context_size: { type: 'string', description: 'Optional connector hint, e.g. "low" | "medium" | "high"' },
+      query: { type: 'string', required: true, description: 'Search query in keyword form' },
+      start_date: { type: 'string', description: 'Optional: only results newer than this date, format YYYY-MM-DD' },
+      end_date: { type: 'string', description: 'Optional: only results older than this date, format YYYY-MM-DD' },
     },
     timeoutMs: config.timeout_ms,
     output: {
@@ -78,7 +79,11 @@ export function apply(ctx, rawConfig) {
     },
     async execute(args, exec) {
       const toolArgs = { query: String(args.query ?? '') }
-      if (typeof args.search_context_size === 'string' && args.search_context_size) toolArgs.search_context_size = args.search_context_size
+      // Only forward arguments the Mistral MCP web_search tool actually accepts
+      // (query/start_date/end_date); unknown keys make the call fail validation.
+      for (const k of ['start_date', 'end_date']) {
+        if (typeof args[k] === 'string' && args[k]) toolArgs[k] = args[k]
+      }
       const gw = resolveGateway(ctx, config)
       const text = await connectorToolCall({
         baseUrl: gw.baseUrl, apiKey: gw.apiKey, model: gw.model,
