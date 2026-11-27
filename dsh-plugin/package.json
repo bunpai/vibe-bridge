@@ -13,5 +13,10 @@
     },
     "./package.json": "./package.json"
   },
-  "dependencies": null
+  "dependencies": null,
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
 }
