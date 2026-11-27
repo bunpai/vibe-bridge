@@ -18,7 +18,10 @@ export { name }
 export const inject = ['tools']
 
 export const Config = z.object({
-  // Empty = inherit from the llm-pi-ai 'cpa' provider in this profile.
+  // Provider name inside llm-pi-ai config to inherit the endpoint from.
+  // Empty = 'cpa' (falls back to the first provider when absent).
+  provider: z.string().default(''),
+  // Empty = inherit from the selected provider.
   base_url: z.string().default(''),
   api_key: z.string().default(''),
   model: z.string().default(''),
@@ -37,7 +40,10 @@ function resolveGateway(ctx, config) {
     const rows = editor?.configuration?.() ?? []
     const row = rows.find((r) => r?.entry?.options?.id === 'llm-pi-ai')
     const merged = { ...(row?.inherited ?? {}), ...(row?.override ?? {}) }
-    const cpa = merged?.providers?.cpa ?? merged?.providers?.[Object.keys(merged?.providers ?? {})[0]]
+    const providers = merged?.providers ?? {}
+    const names = Object.keys(providers)
+    const want = config.provider || 'cpa'
+    const cpa = providers[want] ?? providers[names[0]]
     if (cpa) {
       if (!base_url && cpa.baseURL) base_url = String(cpa.baseURL).replace(/\/+$/, '').replace(/\/v1$/, '')
       if (!api_key) {
@@ -51,7 +57,7 @@ function resolveGateway(ctx, config) {
 }
 
 export function apply(ctx, rawConfig) {
-  const config = { base_url: '', api_key: '', model: '', timeout_ms: 60000, ...(rawConfig ?? {}) }
+  const config = { provider: '', base_url: '', api_key: '', model: '', timeout_ms: 60000, ...(rawConfig ?? {}) }
 
   ctx.tools.register(defineTool({
     name: 'vibe_web_search',
