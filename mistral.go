@@ -156,8 +156,8 @@ func parseCompletionParts(result []byte) completionParts {
 			}
 		}
 		if out.Reasoning == "" {
-				out.Reasoning = think.String()
-			}
+			out.Reasoning = think.String()
+		}
 		out.Content = plain.String()
 	}
 	return out
@@ -443,7 +443,6 @@ func readStreamErrorBody(req rpcExecutorRequest, stream upstreamStreamResponse, 
 	}
 }
 
-
 func dbgTrace(msg string) {
 	f, err := os.OpenFile("/Users/baozipai/Documents/dsh/cpa-test/relay-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -483,7 +482,10 @@ func relayStream(req rpcExecutorRequest, stream upstreamStreamResponse, trace *r
 	emit := func(payload []byte) bool {
 		emitCount++
 		rawEmit, errEmit := hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": payload})
-		pv := string(payload); if len(pv) > 60 { pv = pv[:60] }
+		pv := string(payload)
+		if len(pv) > 60 {
+			pv = pv[:60]
+		}
 		dbgTrace(fmt.Sprintf("emit #%d ok=%v rawlen=%d payload=%s", emitCount, errEmit == nil, len(rawEmit), pv))
 		if errEmit != nil {
 			trace.captureResponseError(fmt.Errorf("stream emit failed: %w", errEmit))

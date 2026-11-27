@@ -98,14 +98,14 @@ type RequestLog struct {
 }
 
 type pluginState struct {
-	Keys       []apiKey       `json:"keys"`
-	Catalog    []string       `json:"catalog"`
-	Models     []modelMapping `json:"models"`
-	DebugMode  bool           `json:"debug_mode,omitempty"`
-	ProxyURL   string         `json:"proxy_url,omitempty"`
-	ImageLimit int            `json:"image_limit,omitempty"`
-	ConnectorMode string      `json:"connector_mode,omitempty"`
-	Logs       []RequestLog   `json:"-"`
+	Keys          []apiKey       `json:"keys"`
+	Catalog       []string       `json:"catalog"`
+	Models        []modelMapping `json:"models"`
+	DebugMode     bool           `json:"debug_mode,omitempty"`
+	ProxyURL      string         `json:"proxy_url,omitempty"`
+	ImageLimit    int            `json:"image_limit,omitempty"`
+	ConnectorMode string         `json:"connector_mode,omitempty"`
+	Logs          []RequestLog   `json:"-"`
 }
 
 type safeKey struct {
@@ -872,12 +872,12 @@ func currentState() pluginState {
 	stateMu.RLock()
 	defer stateMu.RUnlock()
 	return pluginState{
-		Keys:      append([]apiKey(nil), state.Keys...),
-		Catalog:   append([]string{}, state.Catalog...),
-		Models:    append([]modelMapping{}, state.Models...),
-		DebugMode: state.DebugMode,
-		ProxyURL:  state.ProxyURL,
-		ImageLimit: state.ImageLimit,
+		Keys:          append([]apiKey(nil), state.Keys...),
+		Catalog:       append([]string{}, state.Catalog...),
+		Models:        append([]modelMapping{}, state.Models...),
+		DebugMode:     state.DebugMode,
+		ProxyURL:      state.ProxyURL,
+		ImageLimit:    state.ImageLimit,
 		ConnectorMode: state.ConnectorMode,
 	}
 }
@@ -1149,7 +1149,6 @@ func configureDataDirectory(authDir string) {
 	}
 	dataMu.Unlock()
 }
-
 
 // connector mode: "off" disables all connector features, "directive" (default)
 // executes only explicit x_vibe_connector directives, "loop" additionally

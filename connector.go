@@ -22,7 +22,10 @@ type connectorState struct {
 	id          string // web_search connector id
 	initialized bool
 }
-type connectorKey struct{ mu sync.Mutex; byKey map[string]*connectorState }
+type connectorKey struct {
+	mu    sync.Mutex
+	byKey map[string]*connectorState
+}
 
 var connectorCache = &connectorKey{byKey: map[string]*connectorState{}}
 
