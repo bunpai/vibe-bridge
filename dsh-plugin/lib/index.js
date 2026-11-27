@@ -18,14 +18,40 @@ export { name }
 export const inject = ['tools']
 
 export const Config = z.object({
-  base_url: z.string().default('https://ai.8823823.xyz'),
+  // Empty = inherit from the llm-pi-ai 'cpa' provider in this profile.
+  base_url: z.string().default(''),
   api_key: z.string().default(''),
-  model: z.string().default('zai-glm-5-3-flash'),
+  model: z.string().default(''),
   timeout_ms: z.number().default(60000),
 })
 
+/**
+ * Resolve gateway connection: explicit config wins, empty fields fall back to
+ * the profile's llm-pi-ai 'cpa' provider (baseURL + apiKeyEnv/apiKey + first model).
+ */
+function resolveGateway(ctx, config) {
+  let { base_url, api_key, model } = config
+  if (base_url && api_key && model) return { baseUrl: base_url.replace(/\/+$/, '').replace(/\/v1$/, ''), apiKey: api_key, model }
+  try {
+    const editor = ctx.get('configEditor', false)
+    const rows = editor?.configuration?.() ?? []
+    const row = rows.find((r) => r?.entry?.options?.id === 'llm-pi-ai')
+    const merged = { ...(row?.inherited ?? {}), ...(row?.override ?? {}) }
+    const cpa = merged?.providers?.cpa ?? merged?.providers?.[Object.keys(merged?.providers ?? {})[0]]
+    if (cpa) {
+      if (!base_url && cpa.baseURL) base_url = String(cpa.baseURL).replace(/\/+$/, '').replace(/\/v1$/, '')
+      if (!api_key) {
+        if (cpa.apiKey) api_key = cpa.apiKey
+        else if (cpa.apiKeyEnv && process.env[cpa.apiKeyEnv]) api_key = process.env[cpa.apiKeyEnv]
+      }
+      if (!model && Array.isArray(cpa.models) && cpa.models.length) model = cpa.models[0].id ?? cpa.models[0].name
+    }
+  } catch { /* fall through to config-only values */ }
+  return { baseUrl: String(base_url ?? '').replace(/\/+$/, '').replace(/\/v1$/, ''), apiKey: api_key ?? '', model: model ?? '' }
+}
+
 export function apply(ctx, rawConfig) {
-  const config = { base_url: 'https://ai.8823823.xyz', api_key: '', model: 'zai-glm-5-3-flash', timeout_ms: 60000, ...(rawConfig ?? {}) }
+  const config = { base_url: '', api_key: '', model: '', timeout_ms: 60000, ...(rawConfig ?? {}) }
 
   ctx.tools.register(defineTool({
     name: 'vibe_web_search',
@@ -44,8 +70,9 @@ export function apply(ctx, rawConfig) {
     async execute(args, exec) {
       const toolArgs = { query: String(args.query ?? '') }
       if (typeof args.search_context_size === 'string' && args.search_context_size) toolArgs.search_context_size = args.search_context_size
+      const gw = resolveGateway(ctx, config)
       const text = await connectorToolCall({
-        baseUrl: config.base_url, apiKey: config.api_key, model: config.model,
+        baseUrl: gw.baseUrl, apiKey: gw.apiKey, model: gw.model,
         tool: 'web_search', args: toolArgs,
         timeoutMs: config.timeout_ms, signal: exec.signal,
       })
@@ -73,8 +100,9 @@ export function apply(ctx, rawConfig) {
       if (raw) {
         try { toolArgs = JSON.parse(raw) } catch (e) { throw new Error('vibe_connector_call: args_json is not valid JSON: ' + e.message) }
       }
+      const gw = resolveGateway(ctx, config)
       const text = await connectorToolCall({
-        baseUrl: config.base_url, apiKey: config.api_key, model: config.model,
+        baseUrl: gw.baseUrl, apiKey: gw.apiKey, model: gw.model,
         tool: String(args.tool ?? ''), args: toolArgs,
         timeoutMs: config.timeout_ms, signal: exec.signal,
       })
