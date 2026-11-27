@@ -8,7 +8,7 @@ CLIProxyAPI gateway. Billing rides the Vibe quota like the official Vibe CLI.
 
 | tool | args | 说明 |
 |---|---|---|
-| `vibe_web_search` | `query`, optional `search_context_size` | 直连 web_search connector，无 LLM 往返 |
+| `vibe_web_search` | `query`, optional `start_date` / `end_date` | 直连 web_search connector，无 LLM 往返 |
 | `vibe_connector_call` | `tool`, `args_json` | 任意 connector 工具透传（news_search / weather_search / finance_search / open_url） |
 
 ## cordis plugin API contract (verified)
@@ -42,10 +42,14 @@ CLIProxyAPI gateway. Billing rides the Vibe quota like the official Vibe CLI.
    ```yaml
    - id: dsh-vibe-search
      config:
-       base_url: https://your-cpa-gateway
-       api_key: <CPA client key>
-       model: zai-glm-5-3-flash   # any mapped model; the request only carries the directive
+       base_url: https://your-cpa-gateway   # 留空 = 继承 llm-pi-ai 的 cpa provider
+       api_key: <CPA client key>            # 留空 = 继承 provider 的 apiKeyEnv/apiKey
+       model: vibe-search                   # 默认 vibe-search 虚拟模型；仅网关 connector 关闭或插件 < v0.1.3 时才需填底层映射模型
    ```
+
+   全部留空也能跑：端点自动继承 llm-pi-ai 的 `cpa` provider，模型默认
+   `vibe-search`（插件 v0.1.3+ 在网关注册的虚拟搜索模型，自动联网循环）。
+   GUI 设置页（侧栏「插件」→「Vibe 搜索」）可下拉选择复用哪个 provider。
 
 ## Self-contained test profile (workspace DSH_HOME)
 

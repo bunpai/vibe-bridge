@@ -69,6 +69,6 @@
      store-sources:
        - "https://raw.githubusercontent.com/bunpai/vibe-bridge/main/store/registry.json"
 3. （强烈建议）docker env 加 GITHUB_TOKEN=<PAT>——GitHub API 未认证限 60 次/小时/IP，VPS 共享出口易触发 plugin_store_rate_limited
-4. 重启容器，管理面板 → 插件 → 商店，来源选 "raw.githubusercontent.com"，安装 Mistral Vibe Bridge 0.1.0（热载，无需再重启）
+4. 重启容器，管理面板 → 插件 → 商店，来源选 "raw.githubusercontent.com"，安装 Mistral Vibe Bridge（选最新版，v0.1.3 起含 connector 搜索 + vibe-search 虚拟模型；热载，无需再重启）
 5. 在 vibe-bridge 插件控制台添加 Mistral key：channel=vibe、base_url=https://api.mistral.ai/v1、models 映射
 6. 官方源里 RzMY 的 mistral-bridge 与本插件 id 不同（vibe-bridge），可共存
