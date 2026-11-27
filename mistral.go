@@ -334,9 +334,12 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 		}()
 		return http.Header{"content-type": []string{"text/event-stream"}}, nil
 	}
-	if isSearchModel(req.Model) && connectorModeOf(settings) != "off" {
-		// The multi-round streaming relay cannot continue rounds yet, so the
-		// search model runs the non-streaming loop and synthesizes SSE output.
+	_, preWant := wantsConnectorTools(req.Payload)
+	loopStreaming := preWant && connectorModeOf(settings) == "loop"
+	if (isSearchModel(req.Model) && connectorModeOf(settings) != "off") || loopStreaming {
+		// The multi-round streaming relay drops continuation rounds (host-side
+		// emit is accepted but never flushed), so connector loops always run
+		// non-streaming upstream and synthesize SSE output for stream clients.
 		inner := req
 		inner.Stream = false
 		result, _, loopErr := performCompletion(ctx, inner, trace)
