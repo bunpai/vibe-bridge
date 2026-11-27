@@ -96,6 +96,36 @@ Linux 发布包以 Ubuntu 22.04 为构建基线，适用于 glibc 2.35 及以上
 
 思考强度映射可填写 `high=medium, low=none`。留空会传递请求中的强度，最终可用值取决于上游模型。
 
+## 联网搜索（Connector）
+
+插件内置 Mistral 云端 connector（web_search / news_search / weather_search / finance_search / open_url）支持，搜索在 Mistral 服务端执行，计费走 Vibe 额度，无需额外搜索 API Key。插件设置的 **Connector 模式**有三档：
+
+| 模式 | 行为 |
+| --- | --- |
+| `directive`（默认） | 仅当请求带 `x_vibe_connector` 标记时直通执行搜索，不注入工具 |
+| `loop` | 额外允许 `x_vibe_connectors` 触发工具注入 + 多轮自动循环 |
+| `off` | 完全关闭，所有 connector 字段原样透传上游 |
+
+### vibe-search 虚拟模型
+
+无论哪种模式（除 `off`），插件都会注册一个虚拟模型 **`vibe-search`**。把它当普通聊天模型使用即可——插件自动注入搜索工具、执行模型发出的搜索调用、回填结果并续答，全程无需任何特殊字段：
+
+```json
+{
+  "model": "vibe-search",
+  "messages": [{"role": "user", "content": "今天有什么科技新闻？"}],
+  "stream": true
+}
+```
+
+- 上游 backing 模型 = 模型映射列表中第一个已启用的映射（需至少配置一条）
+- 流式请求内部按非流式多轮执行，结束后以 OpenAI 流式形状回放（reasoning_content / content / usage 分帧）
+- 可用 `x_vibe_connectors: ["news_search"]` 自定义注入的 connector 集合，默认 `web_search`
+
+### x_vibe_connector 直通
+
+在任意已映射模型的请求里加 `x_vibe_connector: {"tool": "web_search", "args": {"query": "..."}}`，插件直接执行搜索并合成 completion 返回，不经过 LLM——适合 agent 工具的原始结果回填。dsh 插件 [dsh-vibe-search](dsh-plugin/) 即基于此实现。
+
 ## 额度、日志与数据
 
 | 项目 | 行为 |
