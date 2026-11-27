@@ -28,13 +28,20 @@ export const Config = z.object({
   timeout_ms: z.number().default(60000).volatile(),
 })
 
+const SEARCH_MODEL = 'vibe-search'
+
 /**
- * Resolve gateway connection: explicit config wins, empty fields fall back to
- * the profile's llm-pi-ai 'cpa' provider (baseURL + apiKeyEnv/apiKey + first model).
+ * Resolve gateway connection: explicit config wins, empty base_url/api_key
+ * fall back to the profile's llm-pi-ai 'cpa' provider (baseURL + apiKeyEnv/
+ * apiKey). An empty model defaults to the gateway's virtual 'vibe-search'
+ * model, which auto-loops connector searches; set an explicit backing model
+ * (e.g. zai-glm-5-3-flash) only as an escape hatch for gateways where the
+ * virtual model is unavailable (connector mode off / plugin older than v0.1.3).
  */
 function resolveGateway(ctx, config) {
   let { base_url, api_key, model } = config
-  if (base_url && api_key && model) return { baseUrl: base_url.replace(/\/+$/, '').replace(/\/v1$/, ''), apiKey: api_key, model }
+  if (!model) model = SEARCH_MODEL
+  if (base_url && api_key) return { baseUrl: base_url.replace(/\/+$/, '').replace(/\/v1$/, ''), apiKey: api_key, model }
   try {
     const editor = ctx.get('configEditor', false)
     const rows = editor?.configuration?.() ?? []
@@ -50,7 +57,6 @@ function resolveGateway(ctx, config) {
         if (cpa.apiKey) api_key = cpa.apiKey
         else if (cpa.apiKeyEnv && process.env[cpa.apiKeyEnv]) api_key = process.env[cpa.apiKeyEnv]
       }
-      if (!model && Array.isArray(cpa.models) && cpa.models.length) model = cpa.models[0].id ?? cpa.models[0].name
     }
   } catch { /* fall through to config-only values */ }
   return { baseUrl: String(base_url ?? '').replace(/\/+$/, '').replace(/\/v1$/, ''), apiKey: api_key ?? '', model: model ?? '' }
@@ -113,6 +119,13 @@ export function apply(ctx, rawConfig) {
       const raw = String(args.args_json ?? '').trim()
       if (raw) {
         try { toolArgs = JSON.parse(raw) } catch (e) { throw new Error('vibe_connector_call: args_json is not valid JSON: ' + e.message) }
+      }
+      // Small models often pass the tool arguments as top-level keys instead of
+      // nesting them in args_json — adopt any extras so the call still works.
+      if (!Object.keys(toolArgs).length) {
+        for (const [k, v] of Object.entries(args)) {
+          if (k !== 'tool' && k !== 'args_json' && v !== undefined && v !== null && v !== '') toolArgs[k] = v
+        }
       }
       const gw = resolveGateway(ctx, config)
       const text = await connectorToolCall({

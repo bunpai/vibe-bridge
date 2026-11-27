@@ -24,6 +24,10 @@ import (
 const (
 	pluginID   = "vibe-bridge"
 	pluginName = "Mistral Bridge"
+	// searchModelID is the virtual first-class model that always activates
+	// the connector loop: requests to it get connector tools injected and
+	// their calls executed automatically, regardless of connector_mode.
+	searchModelID = "vibe-search"
 )
 
 // Release builds set this to the tag version with -ldflags -X.
@@ -222,6 +226,9 @@ func staticModels(raw []byte) ([]byte, error) {
 		}
 		models = append(models, modelInfo(model))
 	}
+	if connectorModeOf(state) != "off" {
+		models = append(models, searchModelInfo())
+	}
 	publishedRevision = modelRevision(state.Models)
 	stateMu.Unlock()
 	return okEnvelope(map[string]any{"Provider": pluginID, "Models": models})
@@ -242,6 +249,12 @@ func modelInfo(model modelMapping) map[string]any {
 	}
 }
 
+func searchModelInfo() map[string]any {
+	info := modelInfo(modelMapping{ClientModel: searchModelID, Enabled: true})
+	info["DisplayName"] = "Vibe Search (web connector loop)"
+	return info
+}
+
 func routeModel(raw []byte) ([]byte, error) {
 	var req struct {
 		RequestedModel string `json:"RequestedModel"`
@@ -254,6 +267,9 @@ func routeModel(raw []byte) ([]byte, error) {
 		return okEnvelope(map[string]any{"Handled": false})
 	}
 	state := currentState()
+	if modelID == searchModelID && connectorModeOf(state) != "off" {
+		return okEnvelope(map[string]any{"Handled": true, "TargetKind": "self", "Reason": "vibe_search_model"})
+	}
 	for _, model := range state.Models {
 		if model.Enabled && model.ClientModel == modelID {
 			return okEnvelope(map[string]any{"Handled": true, "TargetKind": "self", "Reason": "mistral_bridge_model"})
@@ -812,10 +828,21 @@ func getKey(id string) (apiKey, bool) {
 func resolveKeyAndModel(snapshot pluginState, requested string) (apiKey, modelMapping, bool) {
 	modelName := strings.TrimPrefix(requested, pluginID+"/")
 	var model *modelMapping
-	for i := range snapshot.Models {
-		if snapshot.Models[i].Enabled && snapshot.Models[i].ClientModel == modelName {
-			model = &snapshot.Models[i]
-			break
+	if modelName == searchModelID {
+		backing := ""
+		for i := range snapshot.Models {
+			if snapshot.Models[i].Enabled {
+				backing = snapshot.Models[i].UpstreamModel
+				break
+			}
+		}
+		model = &modelMapping{ClientModel: searchModelID, UpstreamModel: backing, Enabled: true}
+	} else {
+		for i := range snapshot.Models {
+			if snapshot.Models[i].Enabled && snapshot.Models[i].ClientModel == modelName {
+				model = &snapshot.Models[i]
+				break
+			}
 		}
 	}
 	if model == nil {

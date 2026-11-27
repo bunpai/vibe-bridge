@@ -104,6 +104,97 @@ type statusError struct {
 
 func (e *statusError) Error() string { return e.Message }
 
+// isSearchModel reports whether the request targets the virtual search model.
+func isSearchModel(name string) bool {
+	return strings.TrimPrefix(strings.TrimSpace(name), pluginID+"/") == searchModelID
+}
+
+// completionParts holds the pieces of a final (non-streaming) completion
+// that get re-emitted as synthesized SSE for search-model stream requests.
+type completionParts struct {
+	Reasoning string
+	Content   string
+	Usage     json.RawMessage
+}
+
+// parseCompletionParts extracts reasoning/content/usage from a final
+// (non-streaming) chat completion body.
+func parseCompletionParts(result []byte) completionParts {
+	var root struct {
+		Choices []struct {
+			Message struct {
+				ReasoningContent string          `json:"reasoning_content"`
+				Content          json.RawMessage `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage json.RawMessage `json:"usage"`
+	}
+	var out completionParts
+	if err := json.Unmarshal(result, &root); err != nil || len(root.Choices) == 0 {
+		return out
+	}
+	out.Reasoning = root.Choices[0].Message.ReasoningContent
+	out.Usage = root.Usage
+	msg := root.Choices[0].Message
+	var text string
+	if err := json.Unmarshal(msg.Content, &text); err == nil {
+		out.Content = text
+		return out
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(msg.Content, &parts); err == nil {
+		var think, plain strings.Builder
+		for _, p := range parts {
+			switch p.Type {
+			case "thinking":
+				think.WriteString(p.Text)
+			case "text":
+				plain.WriteString(p.Text)
+			}
+		}
+		if out.Reasoning == "" {
+				out.Reasoning = think.String()
+			}
+		out.Content = plain.String()
+	}
+	return out
+}
+
+// emitSynthesizedCompletion streams a finished completion as SSE chunks:
+// reasoning first (as reasoning_content deltas), then content, then finish +
+// usage, matching the OpenAI/DeepSeek streaming shape clients expect.
+func emitSynthesizedCompletion(req rpcExecutorRequest, result []byte) {
+	parts := parseCompletionParts(result)
+	emit := func(delta map[string]any, finish any) {
+		chunk := map[string]any{
+			"id": "chatcmpl-vibe-search", "object": "chat.completion.chunk", "created": 0, "model": req.Model,
+			"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}},
+		}
+		b, _ := json.Marshal(chunk)
+		hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": []byte("data: " + string(b) + "\n\n")})
+	}
+	if parts.Reasoning != "" {
+		emit(map[string]any{"role": "assistant", "reasoning_content": parts.Reasoning}, nil)
+	}
+	if parts.Content != "" {
+		emit(map[string]any{"role": "assistant", "content": parts.Content}, nil)
+	}
+	emit(map[string]any{}, "stop")
+	if len(parts.Usage) > 0 {
+		usageChunk := map[string]any{
+			"id": "chatcmpl-vibe-search", "object": "chat.completion.chunk", "created": 0, "model": req.Model,
+			"choices": []any{}, "usage": parts.Usage,
+		}
+		b, _ := json.Marshal(usageChunk)
+		hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": []byte("data: " + string(b) + "\n\n")})
+	}
+	hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": []byte("data: [DONE]\n\n")})
+	hostCall("host.stream.close", map[string]any{"stream_id": req.StreamID})
+}
+
 func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *requestTrace) ([]byte, http.Header, error) {
 	settings := currentState()
 	key, model, ok := resolveKeyAndModel(settings, req.Model)
@@ -119,6 +210,10 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 		trace.completeResponse()
 		return synthChatCompletion(req.Model, result), http.Header{"Content-Type": []string{"application/json"}}, nil
 	}
+	searchActive := isSearchModel(req.Model) && connectorModeOf(settings) != "off"
+	if searchActive && model.UpstreamModel == "" {
+		return nil, nil, &statusError{Status: 400, Message: "vibe-search needs at least one enabled model mapping as its upstream backing"}
+	}
 	payload := stripConnectorFields(req.Payload)
 	body, err := transformRequest(payload, model.UpstreamModel, model.ThinkingMap, imageLimitFor(settings, model))
 	if err == nil {
@@ -127,7 +222,14 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 	if err != nil {
 		return nil, nil, &statusError{Status: 400, Message: "Invalid chat completion request"}
 	}
-	if names, wantTools := wantsConnectorTools(req.Payload); wantTools && connectorModeOf(settings) == "loop" {
+	names, wantTools := wantsConnectorTools(req.Payload)
+	if searchActive {
+		wantTools = true
+		if len(names) == 0 {
+			names = []string{"web_search"}
+		}
+	}
+	if wantTools && (searchActive || connectorModeOf(settings) == "loop") {
 		body, err = injectConnectorTools(body, names)
 		if err != nil {
 			return nil, nil, &statusError{Status: 400, Message: "Invalid connector tool injection"}
@@ -174,7 +276,7 @@ func performCompletion(ctx context.Context, req rpcExecutorRequest, trace *reque
 	}
 	result, err := normalizeCompletion(response.Body)
 	if err == nil && !req.Stream {
-		if _, wantLoop := wantsConnectorTools(req.Payload); wantLoop && connectorModeOf(settings) == "loop" {
+		if searchActive || (wantTools && connectorModeOf(settings) == "loop") {
 			for round := 0; round < 4; round++ {
 				assistant, calls, e := extractConnectorCalls(result)
 				if e != nil || len(calls) == 0 {
@@ -229,6 +331,27 @@ func performCompletionStream(ctx context.Context, req rpcExecutorRequest, trace 
 				return
 			}
 			emitSynthesizedStream(req, result)
+		}()
+		return http.Header{"content-type": []string{"text/event-stream"}}, nil
+	}
+	if isSearchModel(req.Model) && connectorModeOf(settings) != "off" {
+		// The multi-round streaming relay cannot continue rounds yet, so the
+		// search model runs the non-streaming loop and synthesizes SSE output.
+		inner := req
+		inner.Stream = false
+		result, _, loopErr := performCompletion(ctx, inner, trace)
+		go func() {
+			if loopErr != nil {
+				msg := loopErr.Error()
+				if se, ok := loopErr.(*statusError); ok && se != nil {
+					msg = se.Message
+				}
+				b, _ := json.Marshal(map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}})
+				hostCall("host.stream.emit", map[string]any{"stream_id": req.StreamID, "payload": []byte("data: " + string(b) + "\n\ndata: [DONE]\n\n")})
+				hostCall("host.stream.close", map[string]any{"stream_id": req.StreamID})
+				return
+			}
+			emitSynthesizedCompletion(req, result)
 		}()
 		return http.Header{"content-type": []string{"text/event-stream"}}, nil
 	}
